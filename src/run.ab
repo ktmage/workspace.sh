@@ -1,0 +1,58 @@
+import { error, file_exists } from "io.ab"
+import { enclosing_worktree, selected_workspace, valid_slug } from "refs.ab"
+
+pub fun workspace_run(root: Text, args: [Text]) {
+    if len(args) < 3 { error("Usage: workspace run <name> [--workspace <slug>] [-- <args>...]", 2) }
+    const name = args[2]
+    let slug = ""
+    let forwarded = []
+    let index = 3
+    while index < len(args) {
+        const flag = args[index]
+        index += 1
+        if flag == "--workspace" {
+            if index >= len(args) or slug != "" { error("Specify one workspace", 2) }
+            slug = args[index]
+            if not valid_slug(slug) { error("Invalid workspace slug: {slug}", 2) }
+            index += 1
+            continue
+        }
+        if flag == "--" and name != "--list" {
+            while index < len(args) {
+                forwarded += [args[index]]
+                index += 1
+            }
+            break
+        }
+        error("Unknown run option: {flag}", 2)
+    }
+
+    const selected = selected_workspace(root, slug)
+    const workplace = "{root}/{selected}"
+    const file = "{workplace}/scripts.json"
+    if not file_exists(file) {
+        if name == "--list" { exit(0) }
+        error("Script not found: {name}")
+    }
+    $ test -f "{file}" && test ! -L "{file}" $ failed { error("Invalid scripts file: {file}") }
+    const definitions = $ /usr/bin/jq -ces '
+      select(length == 1) | .[0] | select(type == "object" and all(to_entries[];
+        (.key | length > 0) and (.value | type == "object"
+        and (.command | type == "string" and length > 0 and (contains("\\u0000") | not))
+        and ((.cwd // "/") | type == "string" and length > 0 and (contains("\\u0000") | not)))))
+    ' -- "{file}" $ failed { error("Invalid scripts file: {file}") }
+    if name == "--list" {
+        $ /usr/bin/jq -r 'keys[]' <<< "{definitions}" $ failed { error("Could not list scripts") }
+        exit(0)
+    }
+    const entry = $ /usr/bin/jq -ce --arg name "{name}" '.[\$name]' <<< "{definitions}" $ failed { error("Script not found: {name}") }
+    const script = $ /usr/bin/jq -r '.command' <<< "{entry}" $ failed { error("Could not read script: {name}") }
+    const relative = $ /usr/bin/jq -r '.cwd // "."' <<< "{entry}" $ failed { error("Could not read cwd: {name}") }
+    const tree = enclosing_worktree(root)
+    let base = workplace
+    $ [[ "{tree}" == "{workplace}/worktrees/"* ]] $ succeeded { base = tree }
+    let cwd = "{base}/{relative}"
+    $ [[ "{relative}" == /* ]] $ succeeded { cwd = relative }
+    $ cd -- "{cwd}" $ failed { error("Could not open script directory: {cwd}") }
+    $ exec /bin/sh -c "{script}" "{name}" "{forwarded}" $ failed { error("Could not execute script: {name}") }
+}

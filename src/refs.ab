@@ -1,0 +1,142 @@
+import { ensure_directory, error, file_exists, lock_file, real_path, strip_json_lines, write_file } from "io.ab"
+
+pub fun valid_slug(slug: Text): Bool {
+    $ LC_ALL=C; [[ "{slug}" =~ ^[a-z0-9][a-z0-9-]*\$ ]] $ failed { return false }
+    return true
+}
+
+fun references_filter(): Text {
+    return "def paths: type == \"array\" and all(.[]; type == \"string\" and startswith(\"/\") and (contains(\"\\u0000\") | not)) and (unique | length) == length;
+        if length == 1 and (.[0] | type == \"object\" and (.directories | paths) and ((.files // []) | paths))
+        then .[0] else error(\"Invalid references.json\") end"
+}
+
+pub fun read_references(path: Text): Text? {
+    const file = "{path}/references.json"
+    const filter = references_filter()
+    $ test -d "{path}" && test ! -L "{path}" && test -f "{file}" && test ! -L "{file}" $?
+    const refs = $ /usr/bin/jq -ces "{filter}" -- "{file}" $?
+    return refs
+}
+
+pub fun create_workspace(root: Text, slug: Text) {
+    if not valid_slug(slug) { error("Invalid workspace slug: {slug}", 2) }
+    ensure_directory(root)
+    const physical = real_path(root) failed { error("Invalid workspace root: {root}") }
+    lock_file("{physical}/.create.lock")
+    const path = "{physical}/{slug}"
+    if not file_exists(path) {
+        const stage = $ /usr/bin/mktemp -d "{physical}/.workspace.XXXXXX" $ failed { error("Could not stage workspace: {slug}") }
+        $ printf '%s\n' '\{"directories":[]}' > "{stage}/references.json" && /bin/mv -n -h -- "{stage}" "{path}" $ failed {
+            error("Could not create workspace: {slug}")
+        }
+    }
+    const refs = silent read_references(path) failed { error("Invalid workspace: {path}") }
+    trust $ test -n "{refs}" $
+    echo(path)
+}
+
+pub fun list_workspaces(root: Text, current: Text, as_json: Bool) {
+    const refs_filter = references_filter()
+    const result = $ LC_ALL=C; export LC_ALL; issue=0
+        for path in "{root}"/*; do
+            test -d "\$path" && test ! -L "\$path" || continue
+            slug=\$\{path##*/}
+            [[ "\$slug" =~ ^[a-z0-9][a-z0-9-]*\$ ]] || continue
+            file="\$path/references.json"
+            test -e "\$file" || test -L "\$file" || continue
+            if test ! -f "\$file" || test -L "\$file"; then
+                printf 'Invalid references: %s\n' "\$file" >&2
+                issue=1
+                continue
+            fi
+            if ! refs=\$(/usr/bin/jq -ces "{refs_filter}" -- "\$file"); then
+                printf 'Invalid references: %s\n' "\$file" >&2
+                issue=1
+                continue
+            fi
+            /usr/bin/jq -c --arg slug "\$slug" --arg path "\$path" --arg cwd "{current}" '
+                def under(\$base): \$cwd == \$base or (\$cwd | startswith(if \$base == "/" then "/" else \$base + "/" end));
+                select(\$cwd == "" or under(\$path) or any(.directories[]; under(.)))
+                | \{ \$slug, \$path }
+            ' <<< "\$refs" || issue=1
+        done
+        printf '%s\n' "\$issue"
+    $ failed { error("Could not list workspaces") }
+    const rows = strip_json_lines(result) failed { error("Could not read workspace list") }
+    const code = $ /usr/bin/jq -r 'last' <<< "{rows}" $ failed { error("Could not read workspace status") }
+    if as_json {
+        $ /usr/bin/jq -c '\{workspaces: .[:-1]}' <<< "{rows}" $ failed { error("Could not print workspace list") }
+    } else {
+        $ /usr/bin/jq -r '.[:-1][] | [.slug, .path] | @tsv' <<< "{rows}" $ failed { error("Could not print workspace list") }
+    }
+    if code == "1" { exit(1) }
+}
+
+pub fun update_reference(root: Text, key: Text, action: Text, slug: Text, input: Text) {
+    if not valid_slug(slug) { error("Invalid workspace slug: {slug}", 2) }
+    let target = input
+    if action == "add" {
+        target = real_path(input) failed { error("Path not found: {input}") }
+        if key == "directories" {
+            $ test -d "{target}" $ failed { error("Not a directory: {target}") }
+        } else {
+            $ test -f "{target}" $ failed { error("Not a regular file: {target}") }
+        }
+    }
+    if action == "remove" {
+        $ [[ "{target}" == /* ]] $ failed { error("Use the registered absolute path", 2) }
+    }
+    if action != "add" and action != "remove" {
+        error("Expected add or remove", 2)
+    }
+
+    const path = "{root}/{slug}"
+    const existing = silent read_references(path) failed { error("Workspace not found or invalid: {slug}") }
+    trust $ test -n "{existing}" $
+    lock_file("{path}/.references.lock")
+    const refs = read_references(path) failed { error("Invalid workspace: {path}") }
+    const changed = $ /usr/bin/jq -ce --arg key "{key}" --arg action "{action}" --arg item "{target}" '
+        if \$action == "add" then
+          .[\$key] = ((.[\$key] // []) | if index(\$item) == null then . + [\$item] else . end)
+        elif ((.[\$key] // []) | index(\$item)) != null then
+          .[\$key] |= map(select(. != \$item))
+        else error("Path not registered") end
+    ' <<< "{refs}" $ failed { error("Could not {action} reference: {target}") }
+    if changed != refs { write_file("{path}/references.json", changed) }
+    echo(target)
+}
+
+// Git inside a submodule resolves the submodule first, so walk outwards to the enclosing worktree.
+pub fun enclosing_worktree(root: Text): Text {
+    let current = $ pwd -P $ failed { return "" }
+    while current != "/" {
+        $ [[ "{current}" == "{root}/"*/worktrees/* ]] $ failed { return "" }
+        const git_tree = suppress $ /usr/bin/git -C "{current}" rev-parse --show-toplevel $ failed { return "" }
+        if git_tree == current {
+            const git_dir = suppress $ /usr/bin/git -C "{current}" rev-parse --absolute-git-dir $ failed { return "" }
+            const common_dir = suppress $ /usr/bin/git -C "{current}" rev-parse --path-format=absolute --git-common-dir $ failed { return "" }
+            if git_dir != common_dir { return current }
+        }
+        current = $ /usr/bin/dirname -- "{current}" $ failed { return "" }
+    }
+    return ""
+}
+
+pub fun current_owner(root: Text): Text {
+    const tree = enclosing_worktree(root)
+    if tree == "" { return "" }
+    const slug = $ tree="{tree}"; rel="\$\{tree#"{root}/"}"; printf '%s' "\$\{rel%%/*}" $ failed { return "" }
+    return slug
+}
+
+pub fun selected_workspace(root: Text, slug: Text): Text {
+    let selected = slug
+    if selected == "" { selected = current_owner(root) }
+    if selected == "" { error("Specify --workspace <project-slug>", 2) }
+    if not valid_slug(selected) { error("Invalid workspace slug: {selected}", 2) }
+    const path = "{root}/{selected}"
+    const refs = silent read_references(path) failed { error("Workspace not found or invalid: {selected}") }
+    trust $ test -n "{refs}" $
+    return selected
+}

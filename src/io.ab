@@ -1,0 +1,49 @@
+pub fun error(message: Text, code: Int = 1) {
+    trust $ printf '%s\n' "{message}" >&2 $
+    exit(code)
+}
+
+pub fun env_or(name: Text, fallback: Text): Text {
+    const value = $ /usr/bin/printenv "{name}" $ failed { return fallback }
+    if value == "" { return fallback }
+    return value
+}
+
+pub fun real_path(path: Text): Text? {
+    const output = $
+        resolved=\$(/bin/realpath -- "{path}" && printf '.') || exit 1
+        newline=\$'\\n'
+        resolved="\$\{resolved%"\$newline."}"
+        if [[ "\$resolved" == *"\$newline" ]]; then exit 1; fi
+        printf '%s' "\$resolved"
+    $?
+    return output
+}
+
+pub fun file_exists(path: Text): Bool {
+    $ test -e "{path}" || test -L "{path}" $ failed { return false }
+    return true
+}
+
+pub fun ensure_directory(path: Text) {
+    $ /bin/mkdir -p -- "{path}" $ failed { error("Could not create directory: {path}") }
+}
+
+pub fun lock_file(path: Text) {
+    // lockf on an inherited descriptor keeps the lock until this shell exits.
+    $ test ! -L "{path}" && exec 9>>"{path}" $ failed { error("Could not open lock: {path}") }
+    $ /usr/bin/lockf -t 15 9 $ failed { error("Could not acquire lock: {path}") }
+}
+
+pub fun write_file(path: Text, data: Text) {
+    const temp = $ /usr/bin/mktemp "{path}.XXXXXX" $ failed { error("Could not stage: {path}") }
+    $ printf '%s\n' "{data}" > "{temp}" && /bin/mv -f -h -- "{temp}" "{path}" $ failed {
+        trust $ /bin/rm -f -- "{temp}" $
+        error("Could not save: {path}")
+    }
+}
+
+pub fun strip_json_lines(input: Text): Text? {
+    const result = $ printf '%s' "{input}" | /usr/bin/jq -cs '.' $?
+    return result
+}

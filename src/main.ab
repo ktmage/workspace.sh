@@ -1,0 +1,56 @@
+import { workspace_run } from "run.ab"
+import { env_or, error, real_path } from "io.ab"
+import { create_workspace, list_workspaces, update_reference } from "refs.ab"
+
+fun usage() {
+    echo("Usage: workspace create <slug> | list [--json] | here [--json]")
+    echo("       workspace directory|file add|remove <slug> <path>")
+    echo("       workspace run <name> [--workspace <slug>] [-- <args>...]")
+}
+
+fun workspace_root(input: Text): Text {
+    $ [[ "{input}" == /* ]] $ failed { error("WORKSPACE_HOME must be an absolute path", 2) }
+    const resolved = silent real_path(input) failed { return input }
+    return resolved
+}
+
+main(args) {
+    trust $ umask 077 $
+    const home = env_or("HOME", "")
+    if home == "" { error("HOME is required") }
+    const root = workspace_root(env_or("WORKSPACE_HOME", "{home}/.workspaces"))
+    if len(args) == 1 { error("Expected a workspace command; use --help", 2) }
+    const action = args[1]
+    if action == "--help" or action == "-h" {
+        usage()
+        exit(0)
+    }
+    if action == "create" {
+        if len(args) != 3 { error("Usage: workspace create <slug>", 2) }
+        create_workspace(root, args[2])
+        exit(0)
+    }
+    if action == "list" or action == "here" {
+        let as_json = false
+        if len(args) == 3 { as_json = args[2] == "--json" }
+        if len(args) > 3 or (len(args) == 3 and not as_json) { error("Usage: workspace {action} [--json]", 2) }
+        let current = ""
+        if action == "here" {
+            current = $ pwd -P $ failed { error("Could not resolve the current directory") }
+        }
+        list_workspaces(root, current, as_json)
+        exit(0)
+    }
+    if action == "directory" or action == "file" {
+        if len(args) != 5 { error("Usage: workspace {action} add|remove <slug> <path>", 2) }
+        let key = "directories"
+        if action == "file" { key = "files" }
+        update_reference(root, key, args[2], args[3], args[4])
+        exit(0)
+    }
+    if action == "run" {
+        workspace_run(root, args)
+        exit(0)
+    }
+    error("Unknown workspace command: {action}", 2)
+}

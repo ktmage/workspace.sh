@@ -8,12 +8,15 @@
 
 A local CLI for organizing work across directories. Use `workspace` to keep file references and named shell commands together. Multiple workspaces can reference the same directory.
 
+**The included script runs with Bash and standard macOS commands.** `workspace run` uses Apple’s Git to detect linked worktrees. Amber is needed only to [rebuild the script](#rebuild-from-source).
+
 ## Requirements
 
-- macOS with Bash 3.2 or newer and the system utilities `/usr/bin/jq`, `/usr/bin/lockf`, and `/bin/realpath`.
-- A working `/usr/bin/git` if you use linked Git worktrees.
+The included shell script runs on macOS with Bash 3.2 or newer and system utilities including `/usr/bin/jq`, `/usr/bin/lockf`, and `/bin/realpath`. It uses `/bin/sh` to run commands from `scripts.json`.
 
-The checkout includes the generated shell script. Amber is needed only to [rebuild it](#rebuild-from-source).
+`workspace run` uses Apple's Git (`/usr/bin/git`) to detect linked worktrees. Check that it is available with `/usr/bin/git --version`. If Git is unavailable, run `xcode-select --install`. [Command Line Tools for Xcode](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools/)
+
+The included script runs without Homebrew or GitHub CLI (`gh`).
 
 ## Quick start
 

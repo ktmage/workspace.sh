@@ -8,12 +8,15 @@
 
 複数のディレクトリにまたがる作業を整理するローカルCLI。`workspace`でファイルへの参照と名前を付けたシェルコマンドをまとめて扱う。同じディレクトリを複数のworkspaceに関連付けられる。
 
+**BashとmacOS標準コマンドで動くシェルスクリプトを1本同梱。** `workspace run`でlinked worktreeを判定するときはAppleのGitを使う。Amberは[ソースから再生成するとき](#ソースから再生成する)に使う。
+
 ## 動作環境
 
-- Bash 3.2以降と、`/usr/bin/jq`、`/usr/bin/lockf`、`/bin/realpath`などの標準コマンドが使えるmacOS。
-- Gitのlinked worktreeを使う場合は、`/usr/bin/git`が動作すること。
+同梱のシェルスクリプトは、Bash 3.2以降と`/usr/bin/jq`、`/usr/bin/lockf`、`/bin/realpath`などの標準コマンドが使えるmacOSで動作する。`scripts.json`に登録したコマンドの実行には`/bin/sh`を使う。
 
-生成済みのシェルスクリプトを同梱している。Amberは[ソースから再生成するとき](#ソースから再生成する)に使う。
+`workspace run`はlinked worktreeを判定する際にAppleのGit（`/usr/bin/git`）を使う。`/usr/bin/git --version`で確認し、使えない場合は`xcode-select --install`で導入する。 [Command Line Tools for Xcode](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools/)
+
+同梱のスクリプトはHomebrewやGitHub CLI（`gh`）なしで動作する。
 
 ## 使い始める
 
